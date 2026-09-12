@@ -1,0 +1,226 @@
+import React, { useState } from 'react';
+import { Playlist, Channel } from '../types';
+import { Plus, ListVideo, Trash2, ShieldCheck, Lock } from 'lucide-react';
+import { parseM3U } from '../lib/m3u';
+import { fetchXtreamPlaylist } from '../lib/xtream';
+
+interface SidebarProps {
+  playlists: Playlist[];
+  activePlaylistId: string | null;
+  onSelectPlaylist: (id: string) => void;
+  onAddPlaylist: (name: string, channels: Channel[]) => void;
+  onDeletePlaylist: (id: string) => void;
+}
+
+export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPlaylist, onDeletePlaylist }: SidebarProps) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newUrl, setNewUrl] = useState('');
+  
+  const [xtreamUrl, setXtreamUrl] = useState('');
+  const [xtreamUser, setXtreamUser] = useState('');
+  const [xtreamPass, setXtreamPass] = useState('');
+  
+  const [addMode, setAddMode] = useState<'url' | 'file' | 'xtream'>('url');
+  
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    
+    if (!newName.trim()) {
+      setError('Liste adı gerekli');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      let channels: Channel[] = [];
+
+      if (addMode === 'file') {
+        const fileInput = document.getElementById('file-upload') as HTMLInputElement;
+        const file = fileInput?.files?.[0];
+        if (!file) {
+          setError('Lütfen bir dosya seçin');
+          setLoading(false);
+          return;
+        }
+        const content = await file.text();
+        channels = parseM3U(content);
+      } else if (addMode === 'url') {
+        if (!newUrl.trim()) {
+          setError('URL gerekli');
+          setLoading(false);
+          return;
+        }
+        const response = await fetch(newUrl);
+        if (!response.ok) throw new Error('Ağ hatası');
+        const content = await response.text();
+        channels = parseM3U(content);
+      } else if (addMode === 'xtream') {
+        if (!xtreamUrl || !xtreamUser || !xtreamPass) {
+          setError('Tüm Xtream bilgileri gerekli');
+          setLoading(false);
+          return;
+        }
+        channels = await fetchXtreamPlaylist(xtreamUrl, xtreamUser, xtreamPass);
+      }
+
+      onAddPlaylist(newName, channels);
+      setIsAdding(false);
+      setNewName('');
+      setNewUrl('');
+      setXtreamUrl('');
+      setXtreamUser('');
+      setXtreamPass('');
+    } catch (err: any) {
+      setError(err.message || 'Liste yüklenemedi. Lütfen kontrol edin.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col h-full overflow-hidden text-slate-300">
+      <div className="p-4 border-b border-slate-800 flex items-center gap-2">
+        <ShieldCheck className="text-emerald-500 w-6 h-6" />
+        <h1 className="text-white font-bold text-lg tracking-tight">Güvenli IPTV</h1>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Listeler</h2>
+          <button 
+            onClick={() => setIsAdding(!isAdding)}
+            className="p-1 hover:bg-slate-800 rounded-md transition-colors text-slate-400 hover:text-white"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+
+        {isAdding && (
+          <form onSubmit={handleAdd} className="bg-slate-800 p-3 rounded-lg space-y-3 mb-4">
+            <input 
+              type="text" 
+              placeholder="Liste Adı" 
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+            />
+            
+            <div className="flex gap-1 text-xs">
+              <button 
+                type="button" 
+                onClick={() => setAddMode('url')}
+                className={`flex-1 py-1 rounded transition-colors ${addMode === 'url' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+              >
+                URL
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setAddMode('file')}
+                className={`flex-1 py-1 rounded transition-colors ${addMode === 'file' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+              >
+                Dosya
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setAddMode('xtream')}
+                className={`flex-1 py-1 rounded transition-colors ${addMode === 'xtream' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+              >
+                Xtream
+              </button>
+            </div>
+
+            {addMode === 'file' && (
+              <input 
+                id="file-upload"
+                type="file" 
+                accept=".m3u,.m3u8"
+                className="w-full text-sm text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-slate-700 file:text-slate-300"
+              />
+            )}
+            
+            {addMode === 'url' && (
+              <input 
+                type="url" 
+                placeholder="M3U URL" 
+                value={newUrl}
+                onChange={(e) => setNewUrl(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            )}
+
+            {addMode === 'xtream' && (
+              <div className="space-y-2">
+                <input 
+                  type="url" 
+                  placeholder="Sunucu URL (http://...)" 
+                  value={xtreamUrl}
+                  onChange={(e) => setXtreamUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                />
+                <input 
+                  type="text" 
+                  placeholder="Kullanıcı Adı" 
+                  value={xtreamUser}
+                  onChange={(e) => setXtreamUser(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                />
+                <input 
+                  type="password" 
+                  placeholder="Şifre" 
+                  value={xtreamPass}
+                  onChange={(e) => setXtreamPass(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+            )}
+
+            {error && <p className="text-red-400 text-xs">{error}</p>}
+            
+            <button 
+              type="submit" 
+              disabled={loading}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white rounded p-2 text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {loading ? 'Yükleniyor...' : 'Ekle'}
+            </button>
+          </form>
+        )}
+
+        <div className="space-y-1">
+          {playlists.map(pl => (
+            <div 
+              key={pl.id}
+              className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                activePlaylistId === pl.id ? 'bg-slate-800 text-white' : 'hover:bg-slate-800/50 text-slate-400 hover:text-slate-200'
+              }`}
+              onClick={() => onSelectPlaylist(pl.id)}
+            >
+              <div className="flex items-center gap-2 overflow-hidden">
+                <ListVideo className="w-4 h-4 flex-shrink-0" />
+                <span className="truncate text-sm font-medium">{pl.name}</span>
+              </div>
+              <button 
+                onClick={(e) => { e.stopPropagation(); onDeletePlaylist(pl.id); }}
+                className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-all"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+          {playlists.length === 0 && !isAdding && (
+            <p className="text-slate-500 text-sm text-center py-4">Liste bulunamadı.</p>
+          )}
+        </div>
+      </div>
+      <div className="p-4 border-t border-slate-800 flex items-center gap-2 text-xs text-slate-500">
+        <Lock className="w-3 h-3 text-emerald-500" />
+        <span>Verileriniz AES-256 ile şifrelenir.</span>
+      </div>
+    </div>
+  );
+}
