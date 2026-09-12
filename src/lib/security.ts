@@ -19,14 +19,14 @@ function getEncryptionKey(): string {
   return key;
 }
 
-export function encryptData(data: string): string {
-  const key = getEncryptionKey();
+export function encryptData(data: string, customKey?: string): string {
+  const key = customKey || getEncryptionKey();
   return CryptoJS.AES.encrypt(data, key).toString();
 }
 
-export function decryptData(encryptedData: string): string | null {
+export function decryptData(encryptedData: string, customKey?: string): string | null {
   try {
-    const key = getEncryptionKey();
+    const key = customKey || getEncryptionKey();
     const bytes = CryptoJS.AES.decrypt(encryptedData, key);
     const decrypted = bytes.toString(CryptoJS.enc.Utf8);
     return decrypted || null;

@@ -1,4 +1,17 @@
-import { Channel } from '../types';
+import { Channel, EpgProgram } from '../types';
+
+const decodeBase64 = (str: string) => {
+  if (!str) return '';
+  try {
+    return decodeURIComponent(escape(atob(str)));
+  } catch (e) {
+    try {
+      return atob(str);
+    } catch (e2) {
+      return str;
+    }
+  }
+};
 
 export async function fetchXtreamPlaylist(url: string, user: string, pass: string): Promise<Channel[]> {
   const baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
@@ -31,7 +44,8 @@ export async function fetchXtreamPlaylist(url: string, user: string, pass: strin
           name: s.name || 'Bilinmeyen Kanal',
           url: `${baseUrl}/live/${user}/${pass}/${s.stream_id}.ts`, // Çoğu xtream sunucusu .ts destekler
           group: catMap.get(s.category_id) || 'Genel',
-          logo: s.stream_icon || ''
+          logo: s.stream_icon || '',
+          streamId: s.stream_id
         });
       });
     }
@@ -40,5 +54,31 @@ export async function fetchXtreamPlaylist(url: string, user: string, pass: strin
   } catch (error) {
     console.error("Xtream API Hatası:", error);
     throw new Error('Xtream sunucusuna bağlanılamadı. CORS veya hatalı bilgi olabilir.');
+  }
+}
+
+export async function fetchXtreamEpg(url: string, user: string, pass: string, streamId: string | number): Promise<EpgProgram[]> {
+  const baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+  
+  try {
+    const res = await fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_short_epg&stream_id=${streamId}&limit=20`);
+    if (!res.ok) return [];
+    
+    const data = await res.json();
+    if (data && data.epg_listings && Array.isArray(data.epg_listings)) {
+      return data.epg_listings.map((item: any) => {
+        return {
+          id: item.id || item.epg_id || Math.random().toString(),
+          title: decodeBase64(item.title) || 'Bilinmeyen Program',
+          description: decodeBase64(item.description) || '',
+          startTimestamp: parseInt(item.start_timestamp) * 1000 || 0,
+          stopTimestamp: parseInt(item.stop_timestamp) * 1000 || 0,
+        };
+      }).sort((a: EpgProgram, b: EpgProgram) => a.startTimestamp - b.startTimestamp);
+    }
+    return [];
+  } catch (error) {
+    console.error("EPG alınırken hata oluştu:", error);
+    return [];
   }
 }

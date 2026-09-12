@@ -1,19 +1,22 @@
 import React, { useState } from 'react';
-import { Playlist, Channel } from '../types';
-import { Plus, ListVideo, Trash2, ShieldCheck, Lock } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Playlist, Channel, XtreamAuth } from '../types';
+import { Plus, ListVideo, Trash2, ShieldCheck, Lock, Settings } from 'lucide-react';
 import { parseM3U } from '../lib/m3u';
 import { fetchXtreamPlaylist } from '../lib/xtream';
+import { SettingsModal } from './SettingsModal';
 
 interface SidebarProps {
   playlists: Playlist[];
   activePlaylistId: string | null;
   onSelectPlaylist: (id: string) => void;
-  onAddPlaylist: (name: string, channels: Channel[]) => void;
+  onAddPlaylist: (name: string, channels: Channel[], xtreamAuth?: XtreamAuth, sourceUrl?: string) => void;
   onDeletePlaylist: (id: string) => void;
 }
 
 export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPlaylist, onDeletePlaylist }: SidebarProps) {
   const [isAdding, setIsAdding] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
   
@@ -38,6 +41,8 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
     try {
       setLoading(true);
       let channels: Channel[] = [];
+      let auth: XtreamAuth | undefined = undefined;
+      let finalSourceUrl: string | undefined = undefined;
 
       if (addMode === 'file') {
         const fileInput = document.getElementById('file-upload') as HTMLInputElement;
@@ -59,6 +64,7 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
         if (!response.ok) throw new Error('Ağ hatası');
         const content = await response.text();
         channels = parseM3U(content);
+        finalSourceUrl = newUrl;
       } else if (addMode === 'xtream') {
         if (!xtreamUrl || !xtreamUser || !xtreamPass) {
           setError('Tüm Xtream bilgileri gerekli');
@@ -66,9 +72,10 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
           return;
         }
         channels = await fetchXtreamPlaylist(xtreamUrl, xtreamUser, xtreamPass);
+        auth = { url: xtreamUrl, user: xtreamUser, pass: xtreamPass };
       }
 
-      onAddPlaylist(newName, channels);
+      onAddPlaylist(newName, channels, auth, finalSourceUrl);
       setIsAdding(false);
       setNewName('');
       setNewUrl('');
@@ -100,15 +107,23 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
           </button>
         </div>
 
-        {isAdding && (
-          <form onSubmit={handleAdd} className="bg-slate-800 p-3 rounded-lg space-y-3 mb-4">
-            <input 
-              type="text" 
-              placeholder="Liste Adı" 
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
-            />
+        <AnimatePresence>
+          {isAdding && (
+            <motion.form 
+              initial={{ height: 0, opacity: 0, overflow: 'hidden' }}
+              animate={{ height: 'auto', opacity: 1, overflow: 'visible' }}
+              exit={{ height: 0, opacity: 0, overflow: 'hidden' }}
+              transition={{ duration: 0.2 }}
+              onSubmit={handleAdd} 
+              className="bg-slate-800 p-3 rounded-lg space-y-3 mb-4"
+            >
+              <input 
+                type="text" 
+                placeholder="Liste Adı" 
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
             
             <div className="flex gap-1 text-xs">
               <button 
@@ -188,39 +203,61 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
             >
               {loading ? 'Yükleniyor...' : 'Ekle'}
             </button>
-          </form>
+          </motion.form>
         )}
+        </AnimatePresence>
 
         <div className="space-y-1">
-          {playlists.map(pl => (
-            <div 
-              key={pl.id}
-              className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
-                activePlaylistId === pl.id ? 'bg-slate-800 text-white' : 'hover:bg-slate-800/50 text-slate-400 hover:text-slate-200'
-              }`}
-              onClick={() => onSelectPlaylist(pl.id)}
-            >
-              <div className="flex items-center gap-2 overflow-hidden">
-                <ListVideo className="w-4 h-4 flex-shrink-0" />
-                <span className="truncate text-sm font-medium">{pl.name}</span>
-              </div>
-              <button 
-                onClick={(e) => { e.stopPropagation(); onDeletePlaylist(pl.id); }}
-                className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-all"
+          <AnimatePresence initial={false}>
+            {playlists.map(pl => (
+              <motion.div 
+                layout
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2 }}
+                key={pl.id}
+                className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                  activePlaylistId === pl.id ? 'bg-slate-800 text-white' : 'hover:bg-slate-800/50 text-slate-400 hover:text-slate-200'
+                }`}
+                onClick={() => onSelectPlaylist(pl.id)}
               >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <ListVideo className="w-4 h-4 flex-shrink-0" />
+                  <span className="truncate text-sm font-medium">{pl.name}</span>
+                </div>
+                <button 
+                  onClick={(e) => { e.stopPropagation(); onDeletePlaylist(pl.id); }}
+                  className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-all"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </motion.div>
+            ))}
+          </AnimatePresence>
           {playlists.length === 0 && !isAdding && (
             <p className="text-slate-500 text-sm text-center py-4">Liste bulunamadı.</p>
           )}
         </div>
       </div>
-      <div className="p-4 border-t border-slate-800 flex items-center gap-2 text-xs text-slate-500">
-        <Lock className="w-3 h-3 text-emerald-500" />
-        <span>Verileriniz AES-256 ile şifrelenir.</span>
+      <div className="p-4 border-t border-slate-800 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <Lock className="w-3 h-3 text-emerald-500" />
+          <span>Şifreli Veri</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* We'll pass isSyncing as a prop or mock it here for UI. Actually, better to just put a global sync dot. For simplicity, let's just use a static setting button here since isSyncing is in App.tsx. I will just add the button. */}
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="p-1.5 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-md transition-colors"
+            title="Ayarlar & Yedekleme"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
       </div>
+      
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} playlists={playlists} />}
     </div>
   );
 }
