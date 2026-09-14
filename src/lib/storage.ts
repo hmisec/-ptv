@@ -21,18 +21,18 @@ interface EpgCacheItem {
 }
 type EpgCacheData = Record<string, EpgCacheItem>;
 
-export function saveEpgCache(streamId: string, programs: EpgProgram[]): void {
+export function saveEpgCache(streamId: string | number, programs: EpgProgram[]): void {
   const data = loadAllEpgCache();
-  data[streamId] = {
+  data[String(streamId)] = {
     timestamp: Date.now(),
     programs
   };
   localStorage.setItem(EPG_CACHE_KEY, encryptData(JSON.stringify(data)));
 }
 
-export function getCachedEpg(streamId: string): EpgProgram[] | null {
+export function getCachedEpg(streamId: string | number): EpgProgram[] | null {
   const data = loadAllEpgCache();
-  const item = data[streamId];
+  const item = data[String(streamId)];
   if (!item) return null;
   
   // Cache is valid for 4 hours
