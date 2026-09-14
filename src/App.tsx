@@ -6,9 +6,11 @@ import { Player } from './components/Player';
 import { EpgPanel } from './components/EpgPanel';
 import { Playlist, Channel } from './types';
 import { savePlaylists, loadPlaylists, saveRecents, loadRecents, loadSettings } from './lib/storage';
-import { ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, Tv, Lock } from 'lucide-react';
 import { parseM3U } from './lib/m3u';
 import { fetchXtreamPlaylist } from './lib/xtream';
+import { SecurityLockModal } from './components/SecurityLockModal';
+import { SeriesModal } from './components/SeriesModal';
 // Import the generated logo
 import logoUrl from './assets/images/guvenli_iptv_logo_1789203403167.jpg';
 
@@ -20,12 +22,48 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [appSettings, setAppSettings] = useState(() => loadSettings());
+  
+  // App-level Security Lock state
+  const [isAppUnlocked, setIsAppUnlocked] = useState<boolean>(() => {
+    const s = loadSettings();
+    return !s.appLockEnabled || !s.pinHash;
+  });
+
+  // On-demand PIN unlock (e.g. Adult content unlock)
+  const [pinPrompt, setPinPrompt] = useState<{
+    isOpen: boolean;
+    onSuccess?: () => void;
+    title?: string;
+    description?: string;
+  }>({ isOpen: false });
+
+  // Series details & episode selection modal
+  const [seriesModalChannel, setSeriesModalChannel] = useState<Channel | null>(null);
+
+  // Leanback Remote TV Notification HUD
+  const [remoteMessage, setRemoteMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const handleSettingsChange = () => setAppSettings(loadSettings());
     window.addEventListener('app-settings-changed', handleSettingsChange);
     return () => window.removeEventListener('app-settings-changed', handleSettingsChange);
   }, []);
+
+  // Theme & Leanback DOM application
+  useEffect(() => {
+    document.documentElement.classList.remove('light-mode', 'oled-mode');
+    if (appSettings.theme === 'light') {
+      document.documentElement.classList.add('light-mode');
+    } else if (appSettings.theme === 'oled') {
+      document.documentElement.classList.add('oled-mode');
+    }
+
+    if (appSettings.leanbackMode) {
+      document.body.classList.add('leanback-active');
+    } else {
+      document.body.classList.remove('leanback-active');
+    }
+  }, [appSettings]);
 
   useEffect(() => {
     // İlk yüklemede listeleri al
@@ -43,6 +81,71 @@ export default function App() {
 
     return () => clearTimeout(timer);
   }, []);
+
+  // TV Remote & Leanback Keyboard Navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
+        return;
+      }
+
+      const currentPlaylist = playlists.find(p => p.id === activePlaylistId);
+      if (!currentPlaylist || currentPlaylist.channels.length === 0) return;
+      const channels = currentPlaylist.channels;
+      const currentIdx = activeChannel ? channels.findIndex(c => c.id === activeChannel.id) : -1;
+
+      if (e.key === 'ArrowUp' || e.key === 'ChannelUp') {
+        e.preventDefault();
+        const prevIdx = currentIdx > 0 ? currentIdx - 1 : channels.length - 1;
+        const nextCh = channels[prevIdx];
+        handleSelectChannel(nextCh);
+        setRemoteMessage(`▲ ${nextCh.name}`);
+        setTimeout(() => setRemoteMessage(null), 2500);
+      } else if (e.key === 'ArrowDown' || e.key === 'ChannelDown') {
+        e.preventDefault();
+        const nextIdx = currentIdx < channels.length - 1 ? currentIdx + 1 : 0;
+        const nextCh = channels[nextIdx];
+        handleSelectChannel(nextCh);
+        setRemoteMessage(`▼ ${nextCh.name}`);
+        setTimeout(() => setRemoteMessage(null), 2500);
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+          setRemoteMessage('Tam Ekran: Açık');
+        } else {
+          document.exitFullscreen().catch(() => {});
+          setRemoteMessage('Tam Ekran: Kapalı');
+        }
+        setTimeout(() => setRemoteMessage(null), 2000);
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        const video = document.querySelector('video');
+        if (video) {
+          video.muted = !video.muted;
+          setRemoteMessage(video.muted ? 'Sessiz: Açık' : 'Ses: Açık');
+          setTimeout(() => setRemoteMessage(null), 2000);
+        }
+      } else if (e.key === ' ' || e.key === 'MediaPlayPause') {
+        e.preventDefault();
+        const video = document.querySelector('video');
+        if (video) {
+          if (video.paused) {
+            video.play().catch(() => {});
+            setRemoteMessage('Oynatılıyor');
+          } else {
+            video.pause();
+            setRemoteMessage('Duraklatıldı');
+          }
+          setTimeout(() => setRemoteMessage(null), 2000);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [playlists, activePlaylistId, activeChannel]);
 
   // Background Sync Mechanism (Runs every 60 minutes)
   useEffect(() => {
@@ -115,6 +218,11 @@ export default function App() {
   }, [playlists.length]); // Sadece liste sayısı değiştiğinde yeniden kur
 
   const handleSelectChannel = (channel: Channel | null) => {
+    if (channel?.contentType === 'series') {
+      setSeriesModalChannel(channel);
+      return;
+    }
+
     setActiveChannel(channel);
     if (channel) {
       setRecentChannelIds(prev => {
@@ -194,6 +302,19 @@ export default function App() {
     );
   }
 
+  // App-level lock protection
+  if (!isAppUnlocked) {
+    return (
+      <SecurityLockModal
+        isAppLock={true}
+        title="Güvenli Kasa Kilitli"
+        description="IPTV bilgileri ve geçmişiniz AES-256 ile korunuyor. Açmak için lütfen PIN kodunuzu veya biyometrik kilidi kullanın."
+        onSuccess={() => setIsAppUnlocked(true)}
+        onCancel={() => {}}
+      />
+    );
+  }
+
   return (
     <>
       <style>{`
@@ -203,7 +324,7 @@ export default function App() {
           --color-emerald-600: ${appSettings.themeColor};
         }
       `}</style>
-      <div className="flex h-screen w-full bg-black overflow-hidden font-sans text-slate-200">
+      <div className="flex h-screen w-full bg-black overflow-hidden font-sans text-slate-200 relative">
         <Sidebar 
           playlists={playlists}
           activePlaylistId={activePlaylistId}
@@ -228,6 +349,14 @@ export default function App() {
                 onSelectChannel={handleSelectChannel}
                 onToggleFavorite={handleToggleFavorite}
                 recentChannelIds={recentChannelIds}
+                onRequestPinUnlock={(onSuccess) => {
+                  setPinPrompt({
+                    isOpen: true,
+                    onSuccess,
+                    title: 'Yetişkin İçerik Kilidi',
+                    description: 'Korumalı kategoriyi açmak için lütfen PIN kodunuzu girin.'
+                  });
+                }}
               />
             </motion.div>
           ) : (
@@ -259,10 +388,73 @@ export default function App() {
                 Kanal Listeleri Arka Planda Güncelleniyor...
               </motion.div>
             )}
+
+            {/* Remote Navigation OSD Feedback */}
+            {remoteMessage && (
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0, y: 10 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 10 }}
+                className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-slate-950/90 border border-emerald-500/40 text-emerald-300 px-4 py-2 rounded-xl text-xs font-semibold shadow-2xl flex items-center gap-2 z-50 pointer-events-none backdrop-blur-md"
+              >
+                <Tv className="w-4 h-4 text-emerald-400 animate-pulse" />
+                <span>{remoteMessage}</span>
+              </motion.div>
+            )}
           </AnimatePresence>
+
+          {/* Leanback Mode Shortcuts HUD banner */}
+          {appSettings.leanbackMode && (
+            <div className="bg-slate-950/90 border-b border-slate-800/80 px-4 py-1.5 flex items-center justify-between text-[11px] text-slate-400 z-10">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                <span className="font-semibold text-emerald-400 flex items-center gap-1">
+                  <Tv className="w-3.5 h-3.5" /> Leanback TV Kumanda Modu Aktif
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-slate-400 font-mono">
+                <span>▲ / ▼: Kanal Değiştir</span>
+                <span className="text-slate-600">|</span>
+                <span>Space: Oynat / Durdur</span>
+                <span className="text-slate-600">|</span>
+                <span>F: Tam Ekran</span>
+                <span className="text-slate-600">|</span>
+                <span>M: Sessiz</span>
+              </div>
+            </div>
+          )}
+
           <Player channel={activeChannel} />
           <EpgPanel channel={activeChannel} playlist={activePlaylist} />
         </div>
+
+        {/* Series Episodes & Seasons Selector */}
+        {seriesModalChannel && (
+          <SeriesModal
+            channel={seriesModalChannel}
+            auth={activePlaylist?.xtreamAuth}
+            onSelectEpisode={(epChannel) => {
+              setActiveChannel(epChannel);
+              setRecentChannelIds(prev => [epChannel.id, ...prev.filter(id => id !== epChannel.id)].slice(0, 50));
+            }}
+            onClose={() => setSeriesModalChannel(null)}
+          />
+        )}
+
+        {/* On-demand PIN Verification Modal (Adult / Hidden Content) */}
+        {pinPrompt.isOpen && (
+          <SecurityLockModal
+            isAppLock={false}
+            title={pinPrompt.title}
+            description={pinPrompt.description}
+            onSuccess={() => {
+              const cb = pinPrompt.onSuccess;
+              setPinPrompt({ isOpen: false });
+              if (cb) cb();
+            }}
+            onCancel={() => setPinPrompt({ isOpen: false })}
+          />
+        )}
       </div>
     </>
   );

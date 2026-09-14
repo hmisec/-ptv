@@ -5,6 +5,7 @@ import { Plus, ListVideo, Trash2, ShieldCheck, Lock, Settings } from 'lucide-rea
 import { parseM3U } from '../lib/m3u';
 import { fetchXtreamPlaylist } from '../lib/xtream';
 import { SettingsModal } from './SettingsModal';
+import { P2pSyncModal } from './P2pSyncModal';
 
 interface SidebarProps {
   playlists: Playlist[];
@@ -17,6 +18,7 @@ interface SidebarProps {
 export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPlaylist, onDeletePlaylist }: SidebarProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showP2pSync, setShowP2pSync] = useState(false);
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
   
@@ -257,7 +259,27 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
         </div>
       </div>
       
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} playlists={playlists} />}
+      {showSettings && (
+        <SettingsModal 
+          onClose={() => setShowSettings(false)} 
+          playlists={playlists} 
+          onOpenP2pSync={() => {
+            setShowSettings(false);
+            setShowP2pSync(true);
+          }}
+        />
+      )}
+
+      {showP2pSync && (
+        <P2pSyncModal
+          playlists={playlists}
+          onClose={() => setShowP2pSync(false)}
+          onSyncComplete={() => {
+            setShowP2pSync(false);
+            window.location.reload();
+          }}
+        />
+      )}
     </div>
   );
 }

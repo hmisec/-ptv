@@ -1,8 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Channel } from '../types';
-import { Search, Play, Heart, History, ArrowUpDown, FolderTree, ChevronDown, ChevronRight, List as ListIcon, Sparkles } from 'lucide-react';
+import { Channel, ContentType } from '../types';
+import { 
+  Search, Play, Heart, History, ArrowUpDown, FolderTree, ChevronDown, 
+  ChevronRight, List as ListIcon, Sparkles, Tv, Film, Clapperboard, Lock, Zap
+} from 'lucide-react';
 import { loadSettings } from '../lib/storage';
+import { isAdultContent } from '../lib/security';
 
 interface ChannelListProps {
   channels: Channel[];
@@ -10,6 +14,7 @@ interface ChannelListProps {
   activeChannelId: string | null;
   onToggleFavorite: (channelId: string) => void;
   recentChannelIds: string[];
+  onRequestPinUnlock?: (onSuccess: () => void) => void;
 }
 
 const getQualityRank = (name: string) => {
@@ -21,13 +26,15 @@ const getQualityRank = (name: string) => {
   return 1;
 };
 
-export function ChannelList({ channels, onSelectChannel, activeChannelId, onToggleFavorite, recentChannelIds }: ChannelListProps) {
+export function ChannelList({ channels, onSelectChannel, activeChannelId, onToggleFavorite, recentChannelIds, onRequestPinUnlock }: ChannelListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<string>('Hepsi');
   const [sortType, setSortType] = useState<string>('default');
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [showRecentsOnly, setShowRecentsOnly] = useState(false);
   const [showRecommendedOnly, setShowRecommendedOnly] = useState(false);
+  const [selectedContentType, setSelectedContentType] = useState<'all' | 'live' | 'vod' | 'series'>('all');
+  const [unlockedAdult, setUnlockedAdult] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'folder'>('list');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [hoveredChannel, setHoveredChannel] = useState<Channel | null>(null);
@@ -37,6 +44,10 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [activeSmartTag, setActiveSmartTag] = useState<string | null>(null);
+
+  const hasVodOrSeries = useMemo(() => {
+    return channels.some(c => c.contentType === 'vod' || c.contentType === 'series');
+  }, [channels]);
 
   const SMART_TAGS = ['Spor', 'Haber', 'Film', 'Çocuk'];
 
@@ -126,6 +137,18 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
     ).slice(0, 50); // En fazla 50 öneri
   }, [channels, recentChannelIds, settings]);
 
+  const handleChannelSelect = (channel: Channel) => {
+    const isAdult = isAdultContent(channel.name, channel.group);
+    if (isAdult && settings.adultLock && !unlockedAdult && onRequestPinUnlock) {
+      onRequestPinUnlock(() => {
+        setUnlockedAdult(true);
+        onSelectChannel(channel);
+      });
+      return;
+    }
+    onSelectChannel(channel);
+  };
+
   const filteredChannels = useMemo(() => {
     let baseChannels = showRecommendedOnly ? recommendedChannels : channels;
 
@@ -136,6 +159,11 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
       const isRecent = recentChannelIds.includes(c.id);
       const matchesRecent = !showRecentsOnly || isRecent;
       const notHidden = !settings.hiddenCategories.includes(c.group);
+
+      if (selectedContentType !== 'all') {
+        const cType = c.contentType || 'live';
+        if (cType !== selectedContentType) return false;
+      }
       
       const smartTags = activeSmartTag ? getSmartTags(c.name, c.group) : [];
       const matchesSmartTag = activeSmartTag ? smartTags.includes(activeSmartTag) : true;
@@ -278,6 +306,43 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
             {viewMode === 'folder' ? <ListIcon className="w-5 h-5" /> : <FolderTree className="w-5 h-5" />}
           </button>
         </div>
+
+        {hasVodOrSeries && (
+          <div className="flex gap-1 bg-slate-950/70 p-1 rounded-lg border border-slate-800 text-xs">
+            <button
+              onClick={() => setSelectedContentType('all')}
+              className={`flex-1 py-1 rounded text-center font-medium transition-colors ${
+                selectedContentType === 'all' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Tümü
+            </button>
+            <button
+              onClick={() => setSelectedContentType('live')}
+              className={`flex-1 py-1 rounded flex items-center justify-center gap-1 font-medium transition-colors ${
+                selectedContentType === 'live' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Tv className="w-3 h-3" /> Canlı
+            </button>
+            <button
+              onClick={() => setSelectedContentType('vod')}
+              className={`flex-1 py-1 rounded flex items-center justify-center gap-1 font-medium transition-colors ${
+                selectedContentType === 'vod' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Film className="w-3 h-3" /> Film
+            </button>
+            <button
+              onClick={() => setSelectedContentType('series')}
+              className={`flex-1 py-1 rounded flex items-center justify-center gap-1 font-medium transition-colors ${
+                selectedContentType === 'series' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Clapperboard className="w-3 h-3" /> Dizi
+            </button>
+          </div>
+        )}
         
         <div className="flex gap-2">
           <div className="relative flex-1">
@@ -363,49 +428,56 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
                         transition={{ duration: 0.2 }}
                         className="divide-y divide-slate-800/50 overflow-hidden"
                       >
-                        {groupChannels.map(channel => (
-                          <div
-                            key={channel.id}
-                            onClick={() => onSelectChannel(channel)}
-                            onMouseEnter={(e) => { setHoveredChannel(channel); setHoverPos({ x: e.clientX, y: e.clientY }); }}
-                            onMouseMove={(e) => setHoverPos({ x: e.clientX, y: e.clientY })}
-                            onMouseLeave={() => setHoveredChannel(null)}
-                            className={`group flex items-center gap-3 p-3 pl-8 cursor-pointer transition-colors ${
-                              activeChannelId === channel.id 
-                                ? 'bg-slate-800 border-l-2 border-emerald-500' 
-                                : 'hover:bg-slate-800/50 border-l-2 border-transparent'
-                            }`}
-                          >
-                            <div className="w-8 h-8 rounded bg-slate-800 flex-shrink-0 flex items-center justify-center overflow-hidden relative">
-                              {channel.logo ? (
-                                <img src={channel.logo} alt="" className="w-full h-full object-contain p-1" loading="lazy" />
-                              ) : (
-                                <Play className="w-3 h-3 text-slate-600" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <h3 className={`text-sm font-medium truncate ${
-                                activeChannelId === channel.id ? 'text-[var(--color-emerald-400)]' : 'text-slate-200 group-hover:text-white'
-                              }`}>
-                                {channel.name}
-                              </h3>
-                            </div>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onToggleFavorite(channel.id);
-                              }}
-                              className={`p-1.5 rounded-full transition-all ${
-                                channel.isFavorite 
-                                  ? 'text-rose-500 hover:text-rose-400' 
-                                  : 'text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100'
+                        {groupChannels.map(channel => {
+                          const isAdult = isAdultContent(channel.name, channel.group);
+                          const isLocked = isAdult && settings.adultLock && !unlockedAdult;
+                          return (
+                            <div
+                              key={channel.id}
+                              onClick={() => handleChannelSelect(channel)}
+                              onMouseEnter={(e) => { setHoveredChannel(channel); setHoverPos({ x: e.clientX, y: e.clientY }); }}
+                              onMouseMove={(e) => setHoverPos({ x: e.clientX, y: e.clientY })}
+                              onMouseLeave={() => setHoveredChannel(null)}
+                              className={`group flex items-center gap-3 p-3 pl-8 cursor-pointer transition-colors ${
+                                activeChannelId === channel.id 
+                                  ? 'bg-slate-800 border-l-2 border-emerald-500' 
+                                  : 'hover:bg-slate-800/50 border-l-2 border-transparent'
                               }`}
-                              title={channel.isFavorite ? "Favorilerden Çıkar" : "Favorilere Ekle"}
                             >
-                              <Heart className={`w-4 h-4 ${channel.isFavorite ? 'fill-current' : ''}`} />
-                            </button>
-                          </div>
-                        ))}
+                              <div className="w-8 h-8 rounded bg-slate-800 flex-shrink-0 flex items-center justify-center overflow-hidden relative">
+                                {isLocked ? (
+                                  <Lock className="w-3.5 h-3.5 text-amber-400" />
+                                ) : channel.logo ? (
+                                  <img src={channel.logo} alt="" className="w-full h-full object-contain p-1" loading="lazy" />
+                                ) : (
+                                  <Play className="w-3 h-3 text-slate-600" />
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <h3 className={`text-sm font-medium truncate flex items-center gap-1.5 ${
+                                  activeChannelId === channel.id ? 'text-[var(--color-emerald-400)]' : 'text-slate-200 group-hover:text-white'
+                                }`}>
+                                  {channel.name}
+                                  {isLocked && <Lock className="w-3 h-3 text-amber-400 flex-shrink-0" />}
+                                </h3>
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onToggleFavorite(channel.id);
+                                }}
+                                className={`p-1.5 rounded-full transition-all ${
+                                  channel.isFavorite 
+                                    ? 'text-rose-500 hover:text-rose-400' 
+                                    : 'text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100'
+                                }`}
+                                title={channel.isFavorite ? "Favorilerden Çıkar" : "Favorilere Ekle"}
+                              >
+                                <Heart className={`w-4 h-4 ${channel.isFavorite ? 'fill-current' : ''}`} />
+                              </button>
+                            </div>
+                          );
+                        })}
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -416,55 +488,69 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
         ) : (
           <div className="divide-y divide-slate-800">
             <AnimatePresence initial={false}>
-              {filteredChannels.map(channel => (
-                <motion.div
-                  layout
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: 0.15 }}
-                  key={channel.id}
-                  onClick={() => onSelectChannel(channel)}
-                  onMouseEnter={(e) => { setHoveredChannel(channel); setHoverPos({ x: e.clientX, y: e.clientY }); }}
-                  onMouseMove={(e) => setHoverPos({ x: e.clientX, y: e.clientY })}
-                  onMouseLeave={() => setHoveredChannel(null)}
-                  className={`group flex items-center gap-3 p-3 cursor-pointer transition-colors ${
-                    activeChannelId === channel.id 
-                      ? 'bg-slate-800 border-l-2 border-[var(--color-emerald-500)]' 
-                      : 'hover:bg-slate-800/50 border-l-2 border-transparent'
-                  }`}
-                >
-                  <div className="w-10 h-10 rounded bg-slate-800 flex-shrink-0 flex items-center justify-center overflow-hidden relative">
-                    {channel.logo ? (
-                      <img src={channel.logo} alt="" className="w-full h-full object-contain p-1" loading="lazy" />
-                    ) : (
-                      <Play className="w-4 h-4 text-slate-600" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className={`text-sm font-medium truncate ${
-                      activeChannelId === channel.id ? 'text-[var(--color-emerald-400)]' : 'text-slate-200 group-hover:text-white'
-                    }`}>
-                      {channel.name}
-                    </h3>
-                    <p className="text-xs text-slate-500 truncate">{channel.group}</p>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleFavorite(channel.id);
-                    }}
-                    className={`p-1.5 rounded-full transition-all ${
-                      channel.isFavorite 
-                        ? 'text-rose-500 hover:text-rose-400' 
-                        : 'text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100'
+              {filteredChannels.map(channel => {
+                const isAdult = isAdultContent(channel.name, channel.group);
+                const isLocked = isAdult && settings.adultLock && !unlockedAdult;
+                return (
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    key={channel.id}
+                    onClick={() => handleChannelSelect(channel)}
+                    onMouseEnter={(e) => { setHoveredChannel(channel); setHoverPos({ x: e.clientX, y: e.clientY }); }}
+                    onMouseMove={(e) => setHoverPos({ x: e.clientX, y: e.clientY })}
+                    onMouseLeave={() => setHoveredChannel(null)}
+                    className={`group flex items-center gap-3 p-3 cursor-pointer transition-colors ${
+                      activeChannelId === channel.id 
+                        ? 'bg-slate-800 border-l-2 border-[var(--color-emerald-500)]' 
+                        : 'hover:bg-slate-800/50 border-l-2 border-transparent'
                     }`}
-                    title={channel.isFavorite ? "Favorilerden Çıkar" : "Favorilere Ekle"}
                   >
-                    <Heart className={`w-4 h-4 ${channel.isFavorite ? 'fill-current' : ''}`} />
-                  </button>
-                </motion.div>
-              ))}
+                    <div className="w-10 h-10 rounded bg-slate-800 flex-shrink-0 flex items-center justify-center overflow-hidden relative">
+                      {isLocked ? (
+                        <Lock className="w-4 h-4 text-amber-400" />
+                      ) : channel.logo ? (
+                        <img src={channel.logo} alt="" className="w-full h-full object-contain p-1" loading="lazy" />
+                      ) : (
+                        <Play className="w-4 h-4 text-slate-600" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className={`text-sm font-medium truncate flex items-center gap-1.5 ${
+                        activeChannelId === channel.id ? 'text-[var(--color-emerald-400)]' : 'text-slate-200 group-hover:text-white'
+                      }`}>
+                        {channel.name}
+                        {isLocked && <Lock className="w-3 h-3 text-amber-400 flex-shrink-0" />}
+                      </h3>
+                      <div className="flex items-center gap-1.5 text-xs text-slate-500 truncate">
+                        <span>{channel.group}</span>
+                        {channel.contentType && channel.contentType !== 'live' && (
+                          <span className="text-[10px] bg-slate-800 px-1 rounded text-amber-300 uppercase">
+                            {channel.contentType}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleFavorite(channel.id);
+                      }}
+                      className={`p-1.5 rounded-full transition-all ${
+                        channel.isFavorite 
+                          ? 'text-rose-500 hover:text-rose-400' 
+                          : 'text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100'
+                      }`}
+                      title={channel.isFavorite ? "Favorilerden Çıkar" : "Favorilere Ekle"}
+                    >
+                      <Heart className={`w-4 h-4 ${channel.isFavorite ? 'fill-current' : ''}`} />
+                    </button>
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
           </div>
         )}
@@ -472,14 +558,14 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
 
       {hoveredChannel && (
         <div 
-          className="fixed z-50 bg-slate-900 border border-slate-700 shadow-2xl rounded-lg p-3 w-64 pointer-events-none"
+          className="fixed z-50 bg-slate-900 border border-slate-700 shadow-2xl rounded-xl p-3 w-64 pointer-events-none"
           style={{ 
             left: hoverPos.x + 20, 
             top: hoverPos.y > window.innerHeight - 150 ? hoverPos.y - 120 : hoverPos.y + 20
           }}
         >
           <div className="flex gap-3 mb-2">
-            <div className="w-12 h-12 bg-slate-950/50 rounded flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-800">
+            <div className="w-12 h-12 bg-slate-950/50 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-800">
               {hoveredChannel.logo ? (
                 <img src={hoveredChannel.logo} alt="" className="w-full h-full object-contain p-1" />
               ) : (
@@ -487,11 +573,18 @@ export function ChannelList({ channels, onSelectChannel, activeChannelId, onTogg
               )}
             </div>
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-bold text-slate-200 truncate">{hoveredChannel.name}</h4>
+              <div className="flex items-center gap-1">
+                <h4 className="text-sm font-bold text-slate-200 truncate">{hoveredChannel.name}</h4>
+              </div>
               <p className="text-xs text-emerald-400 truncate">{hoveredChannel.group || 'Kategorisiz'}</p>
+              {settings.zapMode && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-amber-400 font-semibold mt-0.5">
+                  <Zap className="w-3 h-3" /> Zap Önizleme
+                </span>
+              )}
             </div>
           </div>
-          <div className="text-[10px] text-slate-500 bg-slate-950 p-2 rounded border border-slate-800 overflow-hidden text-ellipsis whitespace-nowrap">
+          <div className="text-[10px] text-slate-500 bg-slate-950 p-2 rounded-lg border border-slate-800 overflow-hidden text-ellipsis whitespace-nowrap font-mono">
             {hoveredChannel.url}
           </div>
         </div>

@@ -15,3 +15,19 @@
   --color-black: #f1f5f9;
   --color-white: #0f172a;
 }
+
+.oled-mode {
+  --color-slate-950: #000000;
+  --color-slate-900: #050505;
+  --color-slate-800: #101010;
+  --color-slate-700: #1c1c1c;
+  --color-slate-600: #2d2d2d;
+  --color-black: #000000;
+}
+
+/* Leanback TV Mode: D-Pad / Remote Focus enhancements */
+.leanback-active *:focus-visible {
+  outline: 3px solid var(--color-emerald-500, #10b981) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.4) !important;
+}

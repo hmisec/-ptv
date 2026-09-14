@@ -12,6 +12,17 @@ export const defaultSettings: AppSettings = {
   categoryOrder: [],
   hiddenCategories: [],
   themeColor: '#10b981',
+  theme: 'dark',
+  dohProvider: 'cloudflare',
+  userAgentProfile: 'default',
+  pinProtection: false,
+  biometricAuth: false,
+  adultLock: true,
+  lockedCategories: [],
+  leanbackMode: false,
+  zapMode: false,
+  ramBufferSizeMb: 60,
+  hardwareAcceleration: true,
 };
 
 // --- EPG CACHE ---
@@ -141,8 +152,9 @@ export function loadRecents(): string[] {
 export function exportBackup(password?: string): void {
   const playlists = loadPlaylists();
   const recents = loadRecents();
+  const settings = loadSettings();
   
-  const backupData = JSON.stringify({ playlists, recents });
+  const backupData = JSON.stringify({ playlists, recents, settings, exportDate: Date.now() });
   const encryptedBackup = encryptData(backupData, password);
   
   const blob = new Blob([encryptedBackup], { type: 'text/plain' });
@@ -155,6 +167,48 @@ export function exportBackup(password?: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+export function importBackup(fileContent: string, password?: string): { success: boolean; message: string; playlistsCount: number } {
+  try {
+    const decrypted = decryptData(fileContent.trim(), password);
+    if (!decrypted) {
+      return {
+        success: false,
+        message: 'Şifre çözülemedi! Yanlış parola girilmiş olabilir veya dosya bozuk.',
+        playlistsCount: 0
+      };
+    }
+
+    const data = JSON.parse(decrypted);
+    if (!data.playlists || !Array.isArray(data.playlists)) {
+      return {
+        success: false,
+        message: 'Yedek dosyası geçersiz veya beklenen formatta değil.',
+        playlistsCount: 0
+      };
+    }
+
+    savePlaylists(data.playlists);
+    if (data.recents && Array.isArray(data.recents)) {
+      saveRecents(data.recents);
+    }
+    if (data.settings && typeof data.settings === 'object') {
+      saveSettings({ ...defaultSettings, ...data.settings });
+    }
+
+    return {
+      success: true,
+      message: `${data.playlists.length} adet oynatma listesi başarıyla içe aktarıldı.`,
+      playlistsCount: data.playlists.length
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Ayrıştırma hatası: ${err?.message || 'Bilinmeyen hata'}`,
+      playlistsCount: 0
+    };
+  }
 }
 
 export function saveLogs(logs: ErrorLog[]): void {
