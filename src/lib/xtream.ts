@@ -22,6 +22,91 @@ export interface XtreamFullResult {
   seriesChannels: Channel[];
 }
 
+/**
+ * Normalizes user input into a clean base URL.
+ * Handles missing http://, removes trailing slashes, and strips accidental query or file paths.
+ */
+export function normalizeXtreamBaseUrl(raw: string): string {
+  let trimmed = (raw || '').trim();
+  if (!trimmed) return '';
+
+  // Auto-prepend http:// if user omitted protocol
+  if (!/^https?:\/\//i.test(trimmed)) {
+    trimmed = `http://${trimmed}`;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
+/**
+ * Resilient fetch function for Xtream APIs.
+ * Automatically tries direct fetch first, and falls back to CORS proxies if
+ * browser security (Mixed Content or missing Access-Control-Allow-Origin) blocks it.
+ */
+export async function smartXtreamFetch<T = any>(targetUrl: string, timeoutMs: number = 10000): Promise<T> {
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+  const isTargetHttp = targetUrl.startsWith('http://');
+
+  const candidates: string[] = [];
+
+  // If we are on HTTP or targeting HTTPS, direct connection is viable
+  if (!isHttps || !isTargetHttp) {
+    candidates.push(targetUrl);
+  }
+
+  // CORS/Mixed-content fallback proxies
+  candidates.push(`https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`);
+  candidates.push(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
+
+  // If we are on HTTPS and target is HTTP, direct fetch is guaranteed to fail, but keep as last resort
+  if (isHttps && isTargetHttp) {
+    candidates.push(targetUrl);
+  }
+
+  let lastError: Error | null = null;
+
+  for (const candidate of candidates) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const res = await fetch(candidate, {
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json, text/plain, */*'
+        }
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) {
+        lastError = new Error(`Sunucu yanıtı: HTTP ${res.status}`);
+        continue;
+      }
+
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        // Not valid JSON
+        lastError = new Error('Sunucu geçerli bir JSON yanıtı döndürmedi.');
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        lastError = new Error('Sunucu bağlantısı zaman aşımına uğradı (Timeout).');
+      } else {
+        lastError = err;
+      }
+    }
+  }
+
+  throw lastError || new Error('Xtream sunucusuna bağlanılamadı.');
+}
+
 export async function fetchXtreamPlaylist(
   url: string,
   user: string,
@@ -38,24 +123,51 @@ export async function fetchXtreamFull(
   pass: string,
   fetchVodAndSeries: boolean = true
 ): Promise<XtreamFullResult> {
-  const baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+  const baseUrl = normalizeXtreamBaseUrl(url);
+  if (!baseUrl) {
+    throw new Error('Geçerli bir Xtream sunucu adresi girilmedi.');
+  }
+
   const cacheKey = `${baseUrl}_${user}`;
-  
   if (xtreamCache.has(cacheKey)) {
     return xtreamCache.get(cacheKey);
   }
 
   try {
-    // 1. Live Categories & Streams
-    const [catRes, streamRes] = await Promise.all([
-      fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_live_categories`),
-      fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_live_streams`)
-    ]);
+    // 0. Preliminary credentials & account status verification
+    try {
+      const authInfo = await smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`, 8000);
+      if (authInfo && typeof authInfo === 'object') {
+        if (authInfo.user_info) {
+          const u = authInfo.user_info;
+          if (u.auth === 0) {
+            throw new Error('Giriş başarısız: Kullanıcı adı veya şifre hatalı.');
+          }
+          if (u.status === 'Expired') {
+            throw new Error('IPTV aboneliğinizin kullanım süresi dolmuş.');
+          }
+          if (u.status === 'Banned') {
+            throw new Error('IPTV hesabınız sunucu tarafından engellenmiş (Banned).');
+          }
+        }
+      }
+    } catch (authErr: any) {
+      // If we got a definitive user auth message, rethrow immediately
+      if (authErr?.message && (
+        authErr.message.includes('Giriş başarısız') || 
+        authErr.message.includes('kullanım süresi dolmuş') || 
+        authErr.message.includes('engellenmiş')
+      )) {
+        throw authErr;
+      }
+      // If server doesn't respond to general auth or doesn't support it, continue to live streams query
+    }
 
-    if (!catRes.ok || !streamRes.ok) throw new Error('Sunucuya veya canlı yayınlara bağlanılamadı.');
-    
-    const categories = await catRes.json();
-    const streams = await streamRes.json();
+    // 1. Live Categories & Streams
+    const [categories, streams] = await Promise.all([
+      smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_categories`),
+      smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_streams`)
+    ]);
 
     const catMap = new Map<string, string>();
     if (Array.isArray(categories)) {
@@ -84,38 +196,33 @@ export async function fetchXtreamFull(
 
     if (fetchVodAndSeries) {
       try {
-        // 2. VOD (Movies)
-        const [vodCatRes, vodStreamRes] = await Promise.all([
-          fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_vod_categories`),
-          fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_vod_streams`)
+        // 2. VOD (Filmler)
+        const [vodCats, vodStreams] = await Promise.all([
+          smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_vod_categories`),
+          smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_vod_streams`)
         ]);
 
-        if (vodCatRes.ok && vodStreamRes.ok) {
-          const vodCats = await vodCatRes.json();
-          const vodStreams = await vodStreamRes.json();
+        const vodCatMap = new Map<string, string>();
+        if (Array.isArray(vodCats)) {
+          vodCats.forEach((c: any) => vodCatMap.set(String(c.category_id), c.category_name));
+        }
 
-          const vodCatMap = new Map<string, string>();
-          if (Array.isArray(vodCats)) {
-            vodCats.forEach((c: any) => vodCatMap.set(String(c.category_id), c.category_name));
-          }
-
-          if (Array.isArray(vodStreams)) {
-            vodStreams.forEach((v: any) => {
-              const ext = v.container_extension || 'mp4';
-              vodChannels.push({
-                id: `xtream_vod_${v.stream_id}`,
-                name: v.name || 'Film',
-                url: `${baseUrl}/movie/${user}/${pass}/${v.stream_id}.${ext}`,
-                group: vodCatMap.get(String(v.category_id)) || 'Filmler',
-                logo: v.stream_icon || '',
-                streamId: v.stream_id,
-                contentType: 'vod',
-                containerExtension: ext,
-                rating: v.rating_5based ? `${v.rating_5based}/5` : v.rating,
-                releaseDate: v.releaseDate || v.year
-              });
+        if (Array.isArray(vodStreams)) {
+          vodStreams.forEach((v: any) => {
+            const ext = v.container_extension || 'mp4';
+            vodChannels.push({
+              id: `xtream_vod_${v.stream_id}`,
+              name: v.name || 'Film',
+              url: `${baseUrl}/movie/${user}/${pass}/${v.stream_id}.${ext}`,
+              group: vodCatMap.get(String(v.category_id)) || 'Filmler',
+              logo: v.stream_icon || '',
+              streamId: v.stream_id,
+              contentType: 'vod',
+              containerExtension: ext,
+              rating: v.rating_5based ? `${v.rating_5based}/5` : v.rating,
+              releaseDate: v.releaseDate || v.year
             });
-          }
+          });
         }
       } catch (vodErr) {
         console.warn('VOD fetch skipped or failed:', vodErr);
@@ -123,48 +230,50 @@ export async function fetchXtreamFull(
 
       try {
         // 3. Series (Diziler)
-        const [seriesCatRes, seriesRes] = await Promise.all([
-          fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_series_categories`),
-          fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_series`)
+        const [sCats, seriesList] = await Promise.all([
+          smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_series_categories`),
+          smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_series`)
         ]);
 
-        if (seriesCatRes.ok && seriesRes.ok) {
-          const sCats = await seriesCatRes.json();
-          const seriesList = await seriesRes.json();
+        const seriesCatMap = new Map<string, string>();
+        if (Array.isArray(sCats)) {
+          sCats.forEach((c: any) => seriesCatMap.set(String(c.category_id), c.category_name));
+        }
 
-          const seriesCatMap = new Map<string, string>();
-          if (Array.isArray(sCats)) {
-            sCats.forEach((c: any) => seriesCatMap.set(String(c.category_id), c.category_name));
-          }
-
-          if (Array.isArray(seriesList)) {
-            seriesList.forEach((s: any) => {
-              seriesChannels.push({
-                id: `xtream_series_${s.series_id}`,
-                name: s.name || 'Dizi',
-                url: '', // series url resolved per episode
-                group: seriesCatMap.get(String(s.category_id)) || 'Diziler',
-                logo: s.cover || '',
-                streamId: s.series_id,
-                seriesId: s.series_id,
-                contentType: 'series',
-                plot: s.plot || '',
-                rating: s.rating,
-                releaseDate: s.releaseDate
-              });
+        if (Array.isArray(seriesList)) {
+          seriesList.forEach((s: any) => {
+            seriesChannels.push({
+              id: `xtream_series_${s.series_id}`,
+              name: s.name || 'Dizi',
+              url: '', // series url resolved per episode
+              group: seriesCatMap.get(String(s.category_id)) || 'Diziler',
+              logo: s.cover || '',
+              streamId: s.series_id,
+              seriesId: s.series_id,
+              contentType: 'series',
+              plot: s.plot || '',
+              rating: s.rating,
+              releaseDate: s.releaseDate
             });
-          }
+          });
         }
       } catch (seriesErr) {
         console.warn('Series fetch skipped or failed:', seriesErr);
       }
     }
 
+    if (channels.length === 0 && vodChannels.length === 0 && seriesChannels.length === 0) {
+      throw new Error('Xtream sunucusundan hiçbir yayın kanalı alınamadı. Bilgilerinizi kontrol edin.');
+    }
+
     const result: XtreamFullResult = { channels, vodChannels, seriesChannels };
     xtreamCache.set(cacheKey, result);
     return result;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Xtream API Hatası:", error);
+    if (error?.message) {
+      throw error;
+    }
     throw new Error('Xtream sunucusuna bağlanılamadı. Doğrudan bağlantı engellenmiş veya bilgiler hatalı olabilir.');
   }
 }
@@ -176,21 +285,18 @@ export async function fetchSeriesInfo(
   auth: XtreamAuth,
   seriesId: string | number
 ): Promise<{ seasons: Season[]; episodes: Record<number, Episode[]> }> {
-  const baseUrl = auth.url.endsWith('/') ? auth.url.slice(0, -1) : auth.url;
+  const baseUrl = normalizeXtreamBaseUrl(auth.url);
   const cacheKey = `series_info_${seriesId}`;
   if (xtreamCache.has(cacheKey)) {
     return xtreamCache.get(cacheKey);
   }
 
   try {
-    const res = await fetch(`${baseUrl}/player_api.php?username=${auth.user}&password=${auth.pass}&action=get_series_info&series_id=${seriesId}`);
-    if (!res.ok) throw new Error('Dizi detayları alınamadı.');
-
-    const data = await res.json();
+    const data = await smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(auth.user)}&password=${encodeURIComponent(auth.pass)}&action=get_series_info&series_id=${seriesId}`);
     const seasonsList: Season[] = [];
     const episodesMap: Record<number, Episode[]> = {};
 
-    if (data.seasons && Array.isArray(data.seasons)) {
+    if (data && data.seasons && Array.isArray(data.seasons)) {
       data.seasons.forEach((s: any) => {
         seasonsList.push({
           seasonNumber: s.season_number ?? 1,
@@ -200,7 +306,7 @@ export async function fetchSeriesInfo(
       });
     }
 
-    if (data.episodes && typeof data.episodes === 'object') {
+    if (data && data.episodes && typeof data.episodes === 'object') {
       Object.entries(data.episodes).forEach(([seasonKey, epList]: [string, any]) => {
         const seasonNum = parseInt(seasonKey) || 1;
         if (Array.isArray(epList)) {
@@ -236,13 +342,11 @@ export async function fetchXtreamEpg(
   pass: string,
   streamId: string | number
 ): Promise<EpgProgram[]> {
-  const baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
-  
+  const baseUrl = normalizeXtreamBaseUrl(url);
+
   try {
-    const res = await fetch(`${baseUrl}/player_api.php?username=${user}&password=${pass}&action=get_short_epg&stream_id=${streamId}&limit=20`);
-    if (!res.ok) return [];
+    const data = await smartXtreamFetch(`${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_short_epg&stream_id=${streamId}&limit=20`, 7000);
     
-    const data = await res.json();
     if (data && data.epg_listings && Array.isArray(data.epg_listings)) {
       return data.epg_listings.map((item: any) => {
         return {

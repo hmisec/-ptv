@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Playlist, Channel, XtreamAuth } from '../types';
 import { Plus, ListVideo, Trash2, ShieldCheck, Lock, Settings } from 'lucide-react';
 import { parseM3U } from '../lib/m3u';
-import { fetchXtreamPlaylist } from '../lib/xtream';
+import { fetchXtreamPlaylist, normalizeXtreamBaseUrl } from '../lib/xtream';
 import { SettingsModal } from './SettingsModal';
 import { P2pSyncModal } from './P2pSyncModal';
 
@@ -73,8 +73,14 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
           setLoading(false);
           return;
         }
-        channels = await fetchXtreamPlaylist(xtreamUrl, xtreamUser, xtreamPass);
-        auth = { url: xtreamUrl, user: xtreamUser, pass: xtreamPass };
+        const cleanUrl = normalizeXtreamBaseUrl(xtreamUrl);
+        if (!cleanUrl) {
+          setError('Geçersiz sunucu adresi (örn: http://sunucu.com:8080)');
+          setLoading(false);
+          return;
+        }
+        channels = await fetchXtreamPlaylist(cleanUrl, xtreamUser.trim(), xtreamPass.trim());
+        auth = { url: cleanUrl, user: xtreamUser.trim(), pass: xtreamPass.trim() };
       }
 
       onAddPlaylist(newName, channels, auth, finalSourceUrl);
@@ -173,8 +179,8 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
             {addMode === 'xtream' && (
               <div className="space-y-2">
                 <input 
-                  type="url" 
-                  placeholder="Sunucu URL (http://...)" 
+                  type="text" 
+                  placeholder="Sunucu Adresi (örn: iptv.net:8080)" 
                   value={xtreamUrl}
                   onChange={(e) => setXtreamUrl(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
@@ -193,6 +199,9 @@ export function Sidebar({ playlists, activePlaylistId, onSelectPlaylist, onAddPl
                   onChange={(e) => setXtreamPass(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500"
                 />
+                <p className="text-[10px] text-slate-500">
+                  Otomatik CORS ve SSL uyumluluk motoru devrededir.
+                </p>
               </div>
             )}
 
